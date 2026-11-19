@@ -1,6 +1,11 @@
 package main
 
-import "github.com/egoist/mygo/ui"
+import (
+	"strconv"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+)
 
 // palette holds the theme tokens from the Termix design board.
 type palette struct {
@@ -115,7 +120,17 @@ var light = palette{
 }
 
 type app struct {
-	light bool
+	light       bool
+	win         *mygo.Window
+	sessions    []*session
+	activeID    int
+	nextSession int
+	termErr     error
+
+	renaming    bool
+	renameID    int
+	renameText  string
+	renameFocus ui.Handle
 }
 
 func (a *app) palette() palette {
@@ -126,6 +141,7 @@ func (a *app) palette() palette {
 }
 
 func (a *app) view(c *ui.Context) {
+	c.OnShortcut(ui.Cmd, ui.KeyT, func() { a.newSession() })
 	p := a.palette()
 	ui.Row(c).Fill().Background(p.canvas).Children(func() {
 		a.sidebar(c, p)
@@ -136,6 +152,7 @@ func (a *app) view(c *ui.Context) {
 			a.workspaceStatus(c, p)
 		})
 	})
+	a.renameDialog(c, p)
 }
 
 func (a *app) sidebar(c *ui.Context, p palette) {
@@ -146,19 +163,14 @@ func (a *app) sidebar(c *ui.Context, p palette) {
 		a.searchField(c, p)
 		ui.Scroll(c).Grow(1).Children(func() {
 			ui.Column(c).Padding(18, 8, 8, 8).Children(func() {
-				a.sectionLabel(c, p, "会话", "7", true)
-				a.sectionSub(c, p, "运行中", "3")
-				a.sessionRow(c, p, session{name: "atlas-web", path: "~/projects/atlas", time: "12:48", badge: "dev", running: true, selected: true})
-				a.sessionRow(c, p, session{name: "api-server", path: "~/projects/atlas/api", time: "12:47", badge: "node", running: true})
-				a.sessionRow(c, p, session{name: "deploy@prod", path: "ssh://atlas-prod", time: "11:02", badge: "ssh", running: true})
-
-				a.sectionLabelSpaced(c, p, "已停止", "2")
-				a.sessionRow(c, p, session{name: "postgres", path: "~/docker/atlas-db", time: "昨天", badge: "db"})
-				a.sessionRow(c, p, session{name: "nginx-logs", path: "/var/log/nginx", time: "昨天", badge: "log"})
-
-				a.sectionLabelSpaced(c, p, "最近关闭", "2")
-				a.sessionRow(c, p, session{name: "redis-cli", path: "127.0.0.1:6379", time: "周一", badge: "redis"})
-				a.sessionRow(c, p, session{name: "prisma-studio", path: "~/projects/atlas", time: "周一", badge: "db"})
+				a.sectionLabel(c, p, "会话", strconv.Itoa(len(a.sessions)), false)
+				if len(a.sessions) == 0 {
+					a.emptySessions(c, p)
+				} else {
+					for _, s := range a.sessions {
+						a.localSession(c, p, s)
+					}
+				}
 				a.shortcuts(c, p)
 			})
 		})
@@ -181,13 +193,17 @@ func (a *app) brand(c *ui.Context, p palette) {
 }
 
 func (a *app) newTerminalButton(c *ui.Context, p palette) {
-	ui.Row(c).Height(40).Margin(0, 16, 0, 16).Padding(0, 12, 0, 12).
-		Radius(8).Background(p.accent).Gap(8).AlignItems(ui.Center).Children(func() {
+	btn := ui.ButtonBase(c.Key("new-terminal")).Height(40).Margin(0, 16, 0, 16).
+		Padding(0, 12, 0, 12).Radius(8).Background(p.accent).Gap(8).
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).
+		Label("新建终端").Tooltip("新建终端 ⌘T")
+	btn.Children(func() {
 		icon(c, svgPlus, 15, p.onAccent)
 		ui.Text(c, "新建终端").FontSize(12.5).FontWeight(600).TextColor(p.onAccent)
 		ui.Spacer(c)
 		ui.Text(c, "⌘T").FontSize(10).FontWeight(500).TextColor(p.onAccentMuted)
 	})
+	btn.OnClick(func() { a.newSession() })
 }
 
 func (a *app) searchField(c *ui.Context, p palette) {
@@ -212,81 +228,69 @@ func (a *app) sectionLabel(c *ui.Context, p palette, name, count string, filter 
 	})
 }
 
-func (a *app) sectionLabelSpaced(c *ui.Context, p palette, name, count string) {
-	ui.Box(c).Height(18)
-	a.sectionLabel(c, p, name, count, false)
-}
-
-func (a *app) sectionSub(c *ui.Context, p palette, name, count string) {
-	ui.Row(c).Height(18).Padding(0, 8, 0, 8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, name+" "+count).FontSize(10).TextColor(p.ink3)
+func (a *app) emptySessions(c *ui.Context, p palette) {
+	ui.Column(c).Margin(0, 8, 0, 0).Padding(16, 14, 16, 14).Radius(8).
+		Background(p.elevated).Border(1, p.border).Gap(6).Children(func() {
+		ui.Text(c, "还没有打开的会话").FontSize(11.5).FontWeight(500).TextColor(p.ink2)
+		ui.Text(c, "点击“新建终端”开始一个新的 shell。").FontSize(10.5).TextColor(p.ink3)
 	})
 }
 
-type session struct {
-	name, path, time, badge string
-	running, selected       bool
-}
-
-func (a *app) sessionRow(c *ui.Context, p palette, s session) {
-	row := ui.Box(c).Height(56).Margin(0, 0, 0, 8).Padding(0, 16, 0, 16).Radius(6)
-	if s.selected {
+func (a *app) localSession(c *ui.Context, p palette, s *session) {
+	active := s.id == a.activeID
+	row := ui.ButtonBase(c.Key("session-"+strconv.Itoa(s.id))).Height(56).
+		Margin(0, 0, 0, 8).Padding(0, 16, 0, 16).Radius(6).
+		Cursor(ui.CursorPointer).Label(s.name)
+	switch {
+	case active:
 		row.Background(p.selected).Border(1, p.selectedBorder)
+	case row.Hovered():
+		row.Background(p.elevated)
 	}
+	row.ContextMenu(func(m *ui.Menu) {
+		if m.Item("重命名会话…").Chosen() {
+			a.beginRename(c, s)
+		}
+		m.Separator()
+		if m.Item("关闭会话").Chosen() {
+			a.closeSession(s.id)
+		}
+	})
 	row.Children(func() {
-		if s.selected {
+		if active {
 			ui.Box(c).Absolute().Left(0).Top(12).Bottom(12).Width(2).
 				Radius(1).Background(p.accent)
 		}
-		ui.Column(c).FillHeight().Justify(ui.Center).Gap(3).Children(func() {
+		ui.Column(c).FillHeight().FillWidth().Justify(ui.Center).Gap(3).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				dot(c, 6, dotColor(p, s))
-				ui.Text(c, s.name).Padding(0, 0, 0, 8).FontSize(12).FontWeight(500).
-					TextColor(nameColor(p, s)).SingleLine()
+				col := p.ink
+				if !active {
+					col = p.ink2
+				}
+				dot(c, 6, sessionDot(p, s))
+				ui.Text(c, s.name).Padding(0, 0, 0, 8).FontSize(12).
+					FontWeight(500).TextColor(col).SingleLine()
 				ui.Spacer(c)
-				ui.Text(c, s.time).FontSize(10).TextColor(p.ink3).SingleLine()
+				ui.Box(c).Height(16).Padding(0, 5, 0, 5).Radius(4).
+					Background(p.subtle).Center().Children(func() {
+					ui.Text(c, "本地").FontSize(9).TextColor(p.ink2).SingleLine()
+				})
 			})
-			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, s.path).Padding(0, 0, 0, 14).FontSize(10.5).
-					TextColor(pathColor(p, s)).SingleLine()
-				ui.Spacer(c)
-				badge(c, p, s.badge, s.running)
-			})
+			ui.Text(c, a.sessionPath(s)).FontSize(10.5).TextColor(p.ink3).SingleLine()
 		})
 	})
-}
-
-func dotColor(p palette, s session) ui.Color {
-	if s.running {
-		return p.accent
-	}
-	return p.ink3
-}
-
-func nameColor(p palette, s session) ui.Color {
-	if s.running {
-		return p.ink
-	}
-	return p.ink2
-}
-
-func pathColor(p palette, s session) ui.Color {
-	return p.ink3
+	row.OnClick(func() { a.selectSession(s.id) })
 }
 
 func dot(c *ui.Context, size float32, col ui.Color) {
 	ui.Box(c).Size(size, size).Radius(size / 2).Background(col)
 }
 
-func badge(c *ui.Context, p palette, label string, bright bool) {
-	col := p.ink3
-	if bright {
-		col = p.ink2
+func sessionDot(p palette, s *session) ui.Color {
+	if s.running() {
+		return p.accent
 	}
-	ui.Box(c).Height(16).Padding(0, 5, 0, 5).Radius(4).
-		Background(p.subtle).Center().Children(func() {
-		ui.Text(c, label).FontSize(9).TextColor(col).SingleLine()
-	})
+	return p.ink3
 }
 
 func keycap(c *ui.Context, p palette, label string) {
@@ -318,9 +322,8 @@ func (a *app) sidebarFooter(c *ui.Context, p palette) {
 		BorderWidth(1, 0, 0, 0).BorderColor(p.footerBorder).Children(func() {
 		dot(c, 5, p.accent)
 		ui.Text(c, " 本地").FontSize(10).TextColor(p.ink2)
-		ui.Text(c, " · zsh 5.9").FontSize(10).TextColor(p.ink3)
 		ui.Spacer(c)
-		ui.Text(c, "v1.8.2").FontSize(9.5).TextColor(p.ink3)
+		ui.Text(c, "v0.1.0").FontSize(9.5).TextColor(p.ink3)
 	})
 }
 
@@ -328,12 +331,12 @@ func (a *app) tabBar(c *ui.Context, p palette) {
 	ui.Row(c).Height(44).Padding(0, 16, 0, 16).Background(p.tabBar).
 		BorderWidth(0, 0, 1, 0).BorderColor(p.border).AlignItems(ui.Center).
 		DragWindow().Children(func() {
-		a.tab(c, p, "atlas-web", true, p.accent)
-		a.tab(c, p, "api-server", false, p.accent)
-		a.tab(c, p, "deploy", false, p.ink3)
+		for _, s := range a.sessions {
+			a.tab(c, p, s)
+		}
+		a.newTabButton(c, p)
 		ui.Spacer(c)
-		icon(c, svgPlus, 17, p.ink2)
-		ui.Box(c).Width(18)
+		ui.Box(c).Width(10)
 		icon(c, svgPanelRight, 17, p.ink2)
 		ui.Box(c).Width(18)
 		icon(c, svgSearch, 16, p.ink2)
@@ -370,59 +373,64 @@ func (a *app) themeToggle(c *ui.Context, p palette) {
 	})
 	btn.OnClick(func() {
 		a.light = !a.light
+		a.syncTerminalTheme()
 	})
 }
 
-func (a *app) tab(c *ui.Context, p palette, name string, active bool, dotCol ui.Color) {
-	width := float32(120)
-	switch name {
-	case "atlas-web":
-		width = 174
-	case "api-server":
-		width = 132
+func (a *app) newTabButton(c *ui.Context, p palette) {
+	btn := ui.ButtonBase(c.Key("tab-new")).Size(22, 22).Radius(5).Center().
+		Cursor(ui.CursorPointer).Label("新建终端").Tooltip("新建终端 ⌘T")
+	if btn.Hovered() {
+		btn.Background(p.subtle)
 	}
-	tab := ui.Row(c).Width(width).Height(32).Padding(0, 12, 0, 12).Radius(6).
-		Gap(8).AlignItems(ui.Center).AlignSelf(ui.End)
+	btn.Children(func() {
+		icon(c, svgPlus, 17, p.ink2)
+	})
+	btn.OnClick(func() { a.newSession() })
+	ui.Box(c).Width(4)
+}
+
+func (a *app) tab(c *ui.Context, p palette, s *session) {
+	active := s.id == a.activeID
+	tab := ui.Row(c).Width(132).Height(32).Padding(0, 8, 0, 8).Radius(6).
+		Gap(4).AlignItems(ui.Center).AlignSelf(ui.End)
 	if active {
 		tab.Background(p.selected).Border(1, p.tabBorder)
 	}
-	textColor := p.ink2
-	if active {
-		textColor = p.ink
-	}
 	tab.Children(func() {
-		dot(c, 6, dotCol)
-		ui.Text(c, name).FontSize(12).TextColor(textColor).SingleLine()
-		ui.Spacer(c)
-		icon(c, svgX, 12, p.ink3)
+		textColor := p.ink2
+		if active {
+			textColor = p.ink
+		}
+		hit := ui.ButtonBase(c.Key("tab-" + strconv.Itoa(s.id))).Grow(1).Height(30).
+			Gap(8).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(s.name)
+		hit.Children(func() {
+			dot(c, 6, sessionDot(p, s))
+			ui.Text(c, s.name).FontSize(12).TextColor(textColor).SingleLine()
+			ui.Spacer(c)
+		})
+		hit.OnClick(func() { a.selectSession(s.id) })
+		close := ui.ButtonBase(c.Key("close-"+strconv.Itoa(s.id))).Size(16, 16).
+			Radius(4).Center().Cursor(ui.CursorPointer).Label("关闭 " + s.name)
+		if close.Hovered() {
+			close.Background(p.border2)
+		}
+		close.Children(func() {
+			icon(c, svgX, 11, p.ink3)
+		})
+		close.OnClick(func() { a.closeSession(s.id) })
 	})
-	if name != "deploy" {
-		ui.Box(c).Width(4)
-	}
+	ui.Box(c).Width(4)
 }
 
 func (a *app) sessionToolbar(c *ui.Context, p palette) {
 	ui.Row(c).Height(60).Padding(0, 22, 0, 22).BorderWidth(0, 0, 1, 0).
 		BorderColor(p.subtle).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "~/projects/atlas").Font("Menlo").FontSize(12.5).TextColor(p.ink2)
+		ui.Text(c, a.sessionPath(a.activeSession())).Font("Menlo").FontSize(12.5).
+			TextColor(p.ink2).SingleLine()
 		ui.Box(c).Width(22)
-		pill(c, p, svgBranch, "main")
-		ui.Box(c).Width(8)
-		pill(c, p, nil, "zsh")
-		ui.Box(c).Width(8)
-		pill(c, p, nil, "node 20")
+		pill(c, p, nil, shellName())
 		ui.Spacer(c)
-		ui.Row(c).Height(24).Padding(0, 9, 0, 9).Radius(5).Gap(6).
-			Background(p.runBG).Border(1, p.runBorder).
-			AlignItems(ui.Center).Children(func() {
-			dot(c, 6, p.accent)
-			ui.Text(c, "运行中").FontSize(10.5).TextColor(p.mint)
-		})
-		ui.Box(c).Width(16)
-		ui.Text(c, "12:48:24").FontSize(10.5).TextColor(p.ink3)
-		ui.Box(c).Width(18)
-		icon(c, svgTrash, 15, p.ink3)
-		ui.Box(c).Width(14)
 		icon(c, svgSettings, 15, p.ink3)
 		ui.Box(c).Width(14)
 		icon(c, svgMore, 16, p.ink3)
@@ -441,83 +449,18 @@ func pill(c *ui.Context, p palette, ic *ui.SVG, label string) {
 
 func (a *app) panes(c *ui.Context, p palette) {
 	ui.Column(c).Grow(1).Background(p.terminal).Clip().Children(func() {
-		a.terminalOne(c, p)
-		a.terminalTwo(c, p)
+		a.terminalPane(c, p)
 	})
 }
 
-func (a *app) terminalOne(c *ui.Context, p palette) {
-	ui.Box(c).Grow(61).Clip().Children(func() {
-		ui.Column(c).Padding(18, 22, 0, 22).Gap(0).Children(func() {
-			promptLine(c, p, "pnpm install")
-			monoLine(c, p, ui.Span{Text: "Packages: +412", Color: p.ink3})
-			monoLine(c, p, ui.Span{Text: "Progress: resolved 412, reused 398, downloaded 14, added 412", Color: p.ink3})
-			monoLine(c, p,
-				ui.Span{Text: "✓", Color: p.green},
-				ui.Span{Text: " Done in 8.4s", Color: p.ink2})
-			blankLine(c)
-			promptLine(c, p, "pnpm dev")
-			blankLine(c)
-			monoLine(c, p,
-				ui.Span{Text: "▲", Color: p.amber},
-				ui.Span{Text: " Next.js 15.1.0", Color: p.ink, Weight: 600})
-			monoLine(c, p, ui.Span{Text: "- Local: http://localhost:3000", Color: p.ink2})
-			monoLine(c, p, ui.Span{Text: "- Environments: .env.local", Color: p.ink2})
-			blankLine(c)
-			monoLine(c, p,
-				ui.Span{Text: "✓", Color: p.green},
-				ui.Span{Text: " Ready in 1.2s", Color: p.ink2})
-			monoLine(c, p, ui.Span{Text: "○ Compiling / ...", Color: p.ink2})
-			monoLine(c, p,
-				ui.Span{Text: "✓", Color: p.green},
-				ui.Span{Text: " Compiled / in 842ms", Color: p.ink2})
-			blankLine(c)
-			monoLine(c, p,
-				ui.Span{Text: "⚠", Color: p.amber},
-				ui.Span{Text: " Fast Refresh had to perform a full reload.", Color: p.ink2})
-			errorLine(c, p)
-			ui.Box(c).Height(8)
-			commandWithCursor(c, p)
-			ui.Row(c).Height(20).Margin(56, 0, 0, 0).Justify(ui.End).
-				AlignItems(ui.Center).Gap(14).Children(func() {
-				ui.Text(c, "tab 补全 · ↑ 历史命令 · ⌘K 命令面板").FontSize(10).TextColor(p.ink3)
-				ui.Text(c, "自动滚动").FontSize(10).TextColor(p.ink3)
-			})
-		})
-	})
-}
-
-func (a *app) terminalTwo(c *ui.Context, p palette) {
-	ui.Column(c).Grow(39).BorderWidth(1, 0, 0, 0).BorderColor(p.paneBorder).Children(func() {
-		ui.Row(c).Height(35).Padding(0, 22, 0, 22).Background(p.paneHeader).
-			AlignItems(ui.Center).Children(func() {
-			dot(c, 6, p.accent)
-			ui.Text(c, " api-server").FontSize(11.5).FontWeight(600).TextColor(p.ink)
-			ui.Box(c).Width(8)
-			badge(c, p, "node", false)
-			ui.Text(c, " · ").FontSize(10).TextColor(p.ink3)
-			ui.Text(c, ":4000").FontSize(10).TextColor(p.ink3)
-			ui.Spacer(c)
-			ui.Text(c, "自动滚动").FontSize(10).TextColor(p.ink3)
-		})
-		ui.Box(c).Grow(1).Clip().Children(func() {
-			ui.Column(c).Padding(16, 22, 0, 22).Gap(0).Children(func() {
-				logLine(c, p, "12:47:02", "ready", p.mint, "server listening on 4000")
-				logLine(c, p, "12:47:03", "info", p.ink2, "prisma connected · pool 5")
-				logLine(c, p, "12:48:11", "warn", p.amber, "slow query 1240ms · GET /api/projects")
-				logLine(c, p, "12:48:19", "error", p.red, "ECONNREFUSED 127.0.0.1:5432")
-				logLine(c, p, "12:48:19", "info", p.ink2, "retrying in 2s (1/5)")
-				logLine(c, p, "12:48:21", "ready", p.mint, "reconnected · 6ms")
-				logLine(c, p, "12:48:22", "info", p.ink2, "GET /api/health 200 4ms")
-				logLine(c, p, "12:48:24", "info", p.ink2, "GET /api/projects 200 38ms")
-				logLine(c, p, "12:48:26", "info", p.ink2, "HMR update · src/app/page.tsx")
-				logLine(c, p, "12:48:27", "ready", p.mint, "compiled successfully in 124ms")
-				logLine(c, p, "12:48:29", "info", p.ink2, "ws connected · 2 clients")
-				ui.Row(c).Height(20).Margin(10, 0, 0, 0).Justify(ui.End).
-					AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "tail -f  自动滚动").FontSize(10).TextColor(p.ink3)
-				})
-			})
+func (a *app) terminalPrompt(c *ui.Context, p palette) {
+	ui.Column(c).Grow(1).Padding(18, 22, 0, 22).Children(func() {
+		ui.Row(c).Height(20).AlignItems(ui.Center).Children(func() {
+			mono(ui.RichText(c,
+				ui.Span{Text: "~", Color: p.blue},
+				ui.Span{Text: " ❯ ", Color: p.accent},
+			)).NoWrap()
+			ui.Box(c).Size(7, 14).Background(p.accent).Margin(0, 1)
 		})
 	})
 }
@@ -526,75 +469,18 @@ func (a *app) workspaceStatus(c *ui.Context, p palette) {
 	ui.Row(c).Height(30).Background(p.statusBar).Padding(0, 22, 0, 22).
 		BorderWidth(1, 0, 0, 0).BorderColor(p.statusBorder).
 		AlignItems(ui.Center).Children(func() {
-		icon(c, svgBranch, 12, p.ink3)
-		ui.Text(c, " main").FontSize(10).TextColor(p.ink2)
-		ui.Box(c).Width(16)
 		ui.Text(c, "UTF-8").FontSize(10).TextColor(p.ink3)
 		ui.Box(c).Width(16)
-		ui.Text(c, "zsh 5.9").FontSize(10).TextColor(p.ink3)
-		ui.Box(c).Width(16)
-		ui.Text(c, "node 20.11").FontSize(10).TextColor(p.ink3)
+		ui.Text(c, shellName()).FontSize(10).TextColor(p.ink3)
 		ui.Spacer(c)
-		dot(c, 5, p.accent)
-		ui.Text(c, " 3 个进程组运行中").FontSize(10).TextColor(p.mint)
+		state, color := a.terminalState()
+		dot(c, 5, color)
+		ui.Text(c, " "+state).FontSize(10).TextColor(p.ink2)
 	})
 }
 
 func mono(e ui.Element) ui.Element {
 	return e.Font("Menlo").FontSize(12).FixedLineHeight(20)
-}
-
-func promptLine(c *ui.Context, p palette, cmd string) {
-	mono(ui.RichText(c,
-		ui.Span{Text: "enola@studio", Color: p.mint},
-		ui.Span{Text: ":", Color: p.ink3},
-		ui.Span{Text: " ~/projects/atlas", Color: p.blue},
-		ui.Span{Text: " main ", Color: p.purple},
-		ui.Span{Text: "❯ ", Color: p.accent},
-		ui.Span{Text: cmd, Color: p.ink},
-	)).NoWrap()
-}
-
-func commandWithCursor(c *ui.Context, p palette) {
-	ui.Row(c).Height(20).AlignItems(ui.Center).Children(func() {
-		mono(ui.RichText(c,
-			ui.Span{Text: "enola@studio", Color: p.mint},
-			ui.Span{Text: ":", Color: p.ink3},
-			ui.Span{Text: " ~/projects/atlas", Color: p.blue},
-			ui.Span{Text: " main ", Color: p.purple},
-			ui.Span{Text: "❯ ", Color: p.accent},
-			ui.Span{Text: "pnpm run buil", Color: p.ink},
-		)).NoWrap()
-		ui.Box(c).Size(7, 14).Background(p.accent).Margin(0, 1)
-	})
-}
-
-func monoLine(c *ui.Context, p palette, spans ...ui.Span) {
-	mono(ui.RichText(c, spans...)).NoWrap()
-}
-
-func blankLine(c *ui.Context) {
-	ui.Box(c).Height(20)
-}
-
-func errorLine(c *ui.Context, p palette) {
-	ui.Row(c).Height(24).FillWidth().MaxWidth(793).Margin(0, 0, 0, -6).Padding(0, 6, 0, 6).
-		Background(p.errorBG).AlignItems(ui.Center).Children(func() {
-		mono(ui.RichText(c,
-			ui.Span{Text: "error", Color: p.red, Weight: 600},
-			ui.Span{Text: " connect ECONNREFUSED 127.0.0.1:5432", Color: p.red},
-		)).NoWrap()
-		ui.Spacer(c)
-		ui.Text(c, "retry 2/5").Font("Menlo").FontSize(10).TextColor(p.redMuted)
-	})
-}
-
-func logLine(c *ui.Context, p palette, at, level string, levelColor ui.Color, msg string) {
-	ui.Row(c).Height(19).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, at).Font("Menlo").FontSize(11).TextColor(p.ink3).Width(62)
-		ui.Text(c, level).Font("Menlo").FontSize(11).TextColor(levelColor).Width(46)
-		ui.Text(c, msg).Font("Menlo").FontSize(11.5).TextColor(p.ink2).SingleLine()
-	})
 }
 
 func icon(c *ui.Context, s *ui.SVG, size float32, col ui.Color) {
