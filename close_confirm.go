@@ -7,35 +7,67 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+type closeAction int
+
+const (
+	closeTerminal closeAction = iota
+	restartTerminal
+)
+
 // requestCloseSession asks before a running terminal is closed. The
 // terminal package does not expose its child process group, so a running
 // session always needs confirmation. Exited sessions and sessions without
 // an emulator close at once.
 func (a *app) requestCloseSession(id int) {
+	a.requestSessionClose(id, closeTerminal, nil)
+}
+
+func (a *app) requestRestartSession(id int, pin *sessionToolchain) {
+	a.requestSessionClose(id, restartTerminal, pin)
+}
+
+func (a *app) requestSessionClose(id int, action closeAction, pin *sessionToolchain) {
 	s := a.sessionByID(id)
 	if s == nil {
 		return
 	}
+	a.sessionSettings.open = false
 	if !s.running() {
-		a.closeSession(id)
+		if action == restartTerminal {
+			a.restartSession(id, pin)
+		} else {
+			a.closeSession(id)
+		}
 		return
 	}
 	a.renaming = false
 	a.confirmClose = true
 	a.confirmCloseID = id
+	a.confirmAction = action
+	a.restartPin = pin
 	a.invalidate()
 }
 
 func (a *app) confirmCloseSession() {
 	id := a.confirmCloseID
+	action := a.confirmAction
+	pin := a.restartPin
 	a.confirmClose = false
 	a.confirmCloseID = 0
+	a.confirmAction = closeTerminal
+	a.restartPin = nil
+	if action == restartTerminal {
+		a.restartSession(id, pin)
+		return
+	}
 	a.closeSession(id)
 }
 
 func (a *app) cancelCloseSession() {
 	a.confirmClose = false
 	a.confirmCloseID = 0
+	a.confirmAction = closeTerminal
+	a.restartPin = nil
 	a.invalidate()
 }
 
@@ -54,6 +86,7 @@ func (a *app) closeConfirmDialog(c *ui.Context, p palette) {
 	if s.term != nil {
 		service = serviceHintFromText(s.term.Text())
 	}
+	restart := a.confirmAction == restartTerminal
 	ui.DialogBase(c, &a.confirmClose, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.55))
 		panel.Width(436).Padding(20, 20, 20, 20).Radius(12).
@@ -64,21 +97,43 @@ func (a *app) closeConfirmDialog(c *ui.Context, p palette) {
 					icon(c, svgAlert, 18, p.red)
 				})
 				ui.Column(c).Grow(1).Gap(5).Children(func() {
-					ui.Text(c, "关闭这个终端？").FontSize(14.5).FontWeight(600).
+					title := "关闭这个终端？"
+					if restart {
+						title = "应用新版本并重启？"
+					}
+					ui.Text(c, title).FontSize(14.5).FontWeight(600).
 						TextColor(p.ink).SingleLine()
 					message := "关闭终端会结束其中正在进行的所有任务。如果还有后台服务在运行，也会一并终止。"
+					if restart {
+						message = "重启终端会结束其中正在进行的所有任务。如果还有后台服务在运行，也会一并终止。"
+					}
 					if service {
-						message = "终端输出中出现了服务启动信息。关闭后，这些服务及进行中的任务都会被立即终止。"
+						if restart {
+							message = "终端输出中出现了服务启动信息。重启后，这些服务及进行中的任务都会被立即终止。"
+						} else {
+							message = "终端输出中出现了服务启动信息。关闭后，这些服务及进行中的任务都会被立即终止。"
+						}
 					}
 					ui.Text(c, message).FontSize(11.5).LineHeight(1.45).
 						TextColor(p.ink2)
 				})
 			})
 			a.closeTarget(c, p, s, service)
+			if restart {
+				next := "重启后将跟随项目配置"
+				if a.restartPin != nil {
+					next = "重启后使用 " + toolchainLabel(a.restartPin.Tool) + " " + a.restartPin.Version
+				}
+				ui.Text(c, next).FontSize(10.5).TextColor(p.ink2).SingleLine()
+			}
 			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
 				cancel := a.dialogButton(c, p, "close-cancel", "取消", false)
 				cancel.OnClick(func() { a.cancelCloseSession() })
-				confirm := a.destructiveButton(c, p, "close-confirm", "关闭终端", "确认关闭终端")
+				label, access := "关闭终端", "确认关闭终端"
+				if restart {
+					label, access = "重启终端", "确认重启终端"
+				}
+				confirm := a.destructiveButton(c, p, "close-confirm", label, access)
 				confirm.OnClick(func() { a.confirmCloseSession() })
 			})
 		})

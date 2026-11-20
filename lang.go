@@ -372,16 +372,42 @@ func langTone(p palette, light bool, name string) (ui.Color, ui.Color) {
 }
 
 // langPill is the language chip under the tab bar: the language in its own
-// hue and the version beside it.
-func (a *app) langPill(c *ui.Context, p palette, info langInfo) {
-	fg, bg := langTone(p, a.light, info.Name)
-	ui.Row(c).Height(22).Padding(0, 8, 0, 8).Radius(4).Background(bg).
-		Gap(5).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, info.Name).FontSize(10.5).FontWeight(500).
+// hue and the version beside it. It opens the session settings for quick
+// version changes.
+func (a *app) langPill(c *ui.Context, p palette, s *session, info langInfo) ui.Element {
+	name, version := info.Name, info.Version
+	pinned := s != nil && s.toolchain != nil
+	if pinned {
+		name = toolchainLabel(s.toolchain.Tool)
+		version = s.toolchain.Version
+	}
+	toneName := name
+	if pinned && s.toolchain.Tool == "dotnet" {
+		toneName = "C#"
+	}
+	fg, bg := langTone(p, a.light, toneName)
+	label := "切换终端工具链版本"
+	if pinned {
+		label = "切换终端工具链版本，当前固定 " + name + " " + version
+	}
+	btn := ui.ButtonBase(c.Key("toolchain-pill")).Height(22).Padding(0, 8, 0, 8).
+		Radius(4).Background(bg).Gap(5).AlignItems(ui.Center).
+		Cursor(ui.CursorPointer).Label(label).
+		Tooltip("工具链版本 · 当前会话")
+	if btn.Hovered() {
+		btn.Border(1, ui.RGBA(fg.R, fg.G, fg.B, 0.35))
+	}
+	btn.Children(func() {
+		if pinned {
+			icon(c, svgPin, 10, fg)
+		}
+		ui.Text(c, name).FontSize(10.5).FontWeight(500).
 			TextColor(fg).SingleLine()
-		if info.Version != "" {
-			ui.Text(c, info.Version).FontSize(10).
+		if version != "" {
+			ui.Text(c, version).FontSize(10).
 				TextColor(ui.RGBA(fg.R, fg.G, fg.B, 0.7)).SingleLine()
 		}
 	})
+	btn.OnClick(func() { a.openSessionSettings(s, "pill") })
+	return btn
 }

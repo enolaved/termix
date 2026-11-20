@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/terminal"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -134,6 +135,13 @@ type app struct {
 
 	confirmClose   bool
 	confirmCloseID int
+	confirmAction  closeAction
+	restartPin     *sessionToolchain
+
+	versionManager  versionManager
+	toolchainCache  map[string][]string
+	sessionSettings toolchainPanelState
+	newTerminal     func(terminal.Options) (*terminal.Terminal, error)
 
 	langs        map[string]langInfo
 	toolVersions map[string]string
@@ -282,9 +290,13 @@ func (a *app) localSession(c *ui.Context, p palette, s *session) {
 				ui.Text(c, s.name).Padding(0, 0, 0, 8).FontSize(12).
 					FontWeight(500).TextColor(col).SingleLine()
 				ui.Spacer(c)
+				badge, badgeFG, badgeBG := "本地", p.ink2, p.subtle
+				if pinned := sessionToolchainBadge(s); pinned != "" {
+					badge, badgeFG, badgeBG = pinned, p.mint, p.runBG
+				}
 				ui.Box(c).Height(16).Padding(0, 5, 0, 5).Radius(4).
-					Background(p.subtle).Center().Children(func() {
-					ui.Text(c, "本地").FontSize(9).TextColor(p.ink2).SingleLine()
+					Background(badgeBG).Center().Children(func() {
+					ui.Text(c, badge).FontSize(9).TextColor(badgeFG).SingleLine()
 				})
 			})
 			ui.Text(c, a.sessionPath(s)).FontSize(10.5).TextColor(p.ink3).SingleLine()
@@ -419,6 +431,9 @@ func (a *app) tab(c *ui.Context, p palette, s *session) {
 		hit.Children(func() {
 			dot(c, 6, sessionDot(p, s))
 			ui.Text(c, s.name).FontSize(12).TextColor(textColor).SingleLine()
+			if s.toolchain != nil {
+				icon(c, svgPin, 10, p.accent)
+			}
 			ui.Spacer(c)
 		})
 		hit.OnClick(func() { a.selectSession(s.id) })
@@ -445,11 +460,20 @@ func (a *app) sessionToolbar(c *ui.Context, p palette) {
 		ui.Text(c, a.sessionPath(s)).Font("Menlo").FontSize(12.5).
 			TextColor(p.ink2).SingleLine()
 		ui.Box(c).Width(22)
-		a.langPill(c, p, a.sessionLang(s))
+		pill := a.langPill(c, p, s, a.sessionLang(s))
 		ui.Spacer(c)
-		icon(c, svgSettings, 15, p.ink3)
+		settings := a.sessionSettingsButton(c, p, s)
 		ui.Box(c).Width(14)
 		icon(c, svgMore, 16, p.ink3)
+		if a.sessionSettings.open {
+			anchor := settings
+			if a.sessionSettings.anchor == "pill" {
+				anchor = pill
+			}
+			ui.PopoverBase(c, anchor, &a.sessionSettings.open, func(panel ui.Element) {
+				a.sessionSettingsPanel(c, p, s, panel)
+			})
+		}
 	})
 }
 

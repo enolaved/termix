@@ -65,9 +65,10 @@ func cleanupShellShim() {
 
 // session is one local shell in its own pseudo-terminal.
 type session struct {
-	id   int
-	name string
-	term *terminal.Terminal
+	id        int
+	name      string
+	term      *terminal.Terminal
+	toolchain *sessionToolchain
 }
 
 func (s *session) running() bool {
@@ -106,21 +107,11 @@ func (a *app) terminalTheme() *terminal.Theme {
 // libghostty-vt and sends it the keyboard.
 func (a *app) newSession() {
 	a.nextSession++
-	term, err := terminal.New(terminal.Options{
-		ShellIntegration: true,
-		Env:              shellEnv(),
-		Font:             terminal.Font{Family: "Menlo", Size: 12.5, LineHeight: 1.2},
-		Padding:          terminal.Padding{X: 20, Y: 16},
-		Theme:            a.terminalTheme(),
-		OnTitle:          func(string) { a.invalidate() },
-		OnExit:           func(int) { a.invalidate() },
-	})
+	term, err := a.startTerminal(nil, "")
 	if err != nil {
-		a.termErr = err
 		a.invalidate()
 		return
 	}
-	a.termErr = nil
 	s := &session{
 		id:   a.nextSession,
 		name: fmt.Sprintf("终端 %d", a.nextSession),
@@ -128,7 +119,38 @@ func (a *app) newSession() {
 	}
 	a.sessions = append(a.sessions, s)
 	a.activeID = s.id
+	a.sessionSettings.open = false
 	a.invalidate()
+}
+
+func (a *app) startTerminal(pin *sessionToolchain, dir string) (*terminal.Terminal, error) {
+	opts := a.terminalOptions(pin, dir)
+	create := terminal.New
+	if a.newTerminal != nil {
+		create = a.newTerminal
+	}
+	term, err := create(opts)
+	if err != nil {
+		a.termErr = err
+		return nil, err
+	}
+	a.termErr = nil
+	return term, nil
+}
+
+func (a *app) terminalOptions(pin *sessionToolchain, dir string) terminal.Options {
+	env := shellEnv()
+	env = append(env, pin.Env()...)
+	return terminal.Options{
+		ShellIntegration: true,
+		Dir:              dir,
+		Env:              env,
+		Font:             terminal.Font{Family: "Menlo", Size: 12.5, LineHeight: 1.2},
+		Padding:          terminal.Padding{X: 20, Y: 16},
+		Theme:            a.terminalTheme(),
+		OnTitle:          func(string) { a.invalidate() },
+		OnExit:           func(int) { a.invalidate() },
+	}
 }
 
 func (a *app) invalidate() {
@@ -183,6 +205,7 @@ func (a *app) selectSession(id int) {
 		return
 	}
 	a.activeID = id
+	a.sessionSettings.open = false
 	a.invalidate()
 }
 
@@ -203,6 +226,9 @@ func (a *app) closeSession(id int) {
 		a.confirmClose = false
 		a.confirmCloseID = 0
 	}
+	a.confirmAction = closeTerminal
+	a.restartPin = nil
+	a.sessionSettings.open = false
 	if a.activeID == id {
 		switch {
 		case len(a.sessions) == 0:
@@ -248,6 +274,8 @@ func (a *app) terminalPane(c *ui.Context, p palette) {
 func (a *app) beginRename(c *ui.Context, s *session) {
 	a.confirmClose = false
 	a.confirmCloseID = 0
+	a.confirmAction = closeTerminal
+	a.restartPin = nil
 	a.renaming = true
 	a.renameID = s.id
 	a.renameText = s.name
