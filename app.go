@@ -150,7 +150,10 @@ type app struct {
 	toolPending  map[string]bool
 
 	watchStop chan struct{}
-	watchDir  string
+
+	statePath      string
+	restored       *persistedState
+	restoringState bool
 }
 
 func (a *app) palette() palette {
@@ -396,6 +399,7 @@ func (a *app) themeToggle(c *ui.Context, p palette) {
 	btn.OnClick(func() {
 		a.light = !a.light
 		a.syncTerminalTheme()
+		a.saveState()
 	})
 }
 

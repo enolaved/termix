@@ -69,6 +69,7 @@ type session struct {
 	name      string
 	term      *terminal.Terminal
 	toolchain *sessionToolchain
+	dir       string
 }
 
 func (s *session) running() bool {
@@ -115,15 +116,27 @@ func (a *app) newSession() {
 }
 
 func (a *app) addSession() *session {
+	return a.addSessionWith("", nil, "")
+}
+
+// addSessionWith opens a shell in dir with an optional toolchain pin and
+// name. Empty values fall back to the user's home directory and a numbered
+// default name.
+func (a *app) addSessionWith(name string, pin *sessionToolchain, dir string) *session {
 	a.nextSession++
-	term, err := a.startTerminal(nil, "")
+	term, err := a.startTerminal(pin, dir)
 	if err != nil {
 		return nil
 	}
+	if name == "" {
+		name = fmt.Sprintf("终端 %d", a.nextSession)
+	}
 	s := &session{
-		id:   a.nextSession,
-		name: fmt.Sprintf("终端 %d", a.nextSession),
-		term: term,
+		id:        a.nextSession,
+		name:      name,
+		term:      term,
+		toolchain: cloneToolchain(pin),
+		dir:       dir,
 	}
 	a.sessions = append(a.sessions, s)
 	return s
@@ -246,6 +259,7 @@ func (a *app) closeSession(id int) {
 			a.activeID = a.sessions[len(a.sessions)-1].id
 		}
 	}
+	a.saveState()
 	a.invalidate()
 }
 
@@ -301,6 +315,7 @@ func (a *app) commitRename() {
 	}
 	if s := a.sessionByID(a.renameID); s != nil {
 		s.name = name
+		a.saveState()
 	}
 	a.renaming = false
 }
@@ -367,8 +382,8 @@ func (a *app) dialogButton(c *ui.Context, p palette, key, label string, primary 
 // sessionPath is the working directory the shell reports, with the home
 // directory shortened to ~.
 func (a *app) sessionPath(s *session) string {
-	if s != nil && s.term != nil {
-		if dir := s.term.Dir(); dir != "" {
+	if s != nil {
+		if dir := a.sessionDir(s); dir != "" {
 			return shortHome(dir)
 		}
 	}

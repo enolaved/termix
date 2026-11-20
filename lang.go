@@ -291,8 +291,9 @@ func lookTool(name string) string {
 	return ""
 }
 
-// startDirWatch notices when the active shell changes directory, which is
-// when its language chip may need to change. It wakes on a real change only.
+// startDirWatch notices when a shell changes directory, which is when its
+// language chip and saved working directory may need to change. It wakes on
+// a real change only.
 func (a *app) startDirWatch() {
 	if a.watchStop != nil {
 		return
@@ -307,7 +308,7 @@ func (a *app) startDirWatch() {
 			case <-stop:
 				return
 			case <-ticker.C:
-				mygo.RunOnMain(a.checkActiveDir)
+				mygo.RunOnMain(a.checkSessionDirs)
 			}
 		}
 	}()
@@ -321,16 +322,23 @@ func (a *app) stopDirWatch() {
 	a.watchStop = nil
 }
 
-func (a *app) checkActiveDir() {
-	s := a.activeSession()
-	if s == nil || s.term == nil {
+func (a *app) checkSessionDirs() {
+	changed := false
+	for _, s := range a.sessions {
+		if s.term == nil {
+			continue
+		}
+		dir := s.term.Dir()
+		if dir == "" || dir == s.dir {
+			continue
+		}
+		s.dir = dir
+		changed = true
+	}
+	if !changed {
 		return
 	}
-	dir := s.term.Dir()
-	if dir == a.watchDir {
-		return
-	}
-	a.watchDir = dir
+	a.saveState()
 	a.invalidate()
 }
 

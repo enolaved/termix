@@ -17,9 +17,9 @@ import (
 // requested version is resolved to an installed version before the pin is
 // stored, so the environment uses an exact version.
 type sessionToolchain struct {
-	Manager string
-	Tool    string
-	Version string
+	Manager string `json:"manager"`
+	Tool    string `json:"tool"`
+	Version string `json:"version"`
 }
 
 // Env returns the variables that make a version manager select this tool
@@ -232,10 +232,7 @@ func (a *app) restartSession(id int, pin *sessionToolchain) {
 		return
 	}
 	index := a.sessionIndex(id)
-	dir := ""
-	if old.term != nil {
-		dir = old.term.Dir()
-	}
+	dir := restoreWorkingDir(a.sessionDir(old))
 	term, err := a.startTerminal(pin, dir)
 	if err != nil {
 		a.sessionSettings.open = true
@@ -246,12 +243,13 @@ func (a *app) restartSession(id int, pin *sessionToolchain) {
 	}
 	next := &session{id: old.id, name: old.name, term: term, toolchain: pin}
 	a.sessions[index] = next
+	next.dir = dir
 	a.activeID = next.id
 	a.focusPaneID = next.id
 	if old.term != nil {
 		_ = old.term.Close()
 	}
-	a.watchDir = ""
+	a.saveState()
 	a.invalidate()
 }
 

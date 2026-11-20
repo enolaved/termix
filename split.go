@@ -107,6 +107,7 @@ func (a *app) showSession(id int) {
 	a.activeID = id
 	a.focusPaneID = id
 	a.sessionSettings.open = false
+	a.saveState()
 	a.invalidate()
 }
 
@@ -117,6 +118,7 @@ func (a *app) focusSplitPane(id int) {
 	a.activeID = id
 	a.focusPaneID = id
 	a.sessionSettings.open = false
+	a.saveState()
 	a.invalidate()
 }
 
@@ -148,6 +150,7 @@ func (a *app) splitWithNewSession() {
 	a.activeID = next.id
 	a.focusPaneID = next.id
 	a.sessionSettings.open = false
+	a.saveState()
 	a.invalidate()
 }
 
@@ -160,6 +163,7 @@ func (a *app) stopSplit() {
 		a.activeID = a.sessions[len(a.sessions)-1].id
 	}
 	a.focusPaneID = a.activeID
+	a.saveState()
 	a.invalidate()
 }
 
@@ -184,6 +188,7 @@ func (a *app) removePaneSession(id int) []int {
 		}
 		a.focusPaneID = a.activeID
 	}
+	a.saveState()
 	return after
 }
 
@@ -249,6 +254,7 @@ func (a *app) placeDraggedSession(id, anchorID int, edge dropEdge) {
 	a.activeID = id
 	a.focusPaneID = id
 	a.sessionSettings.open = false
+	a.saveState()
 	a.invalidate()
 }
 

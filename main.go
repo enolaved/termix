@@ -8,21 +8,27 @@ import (
 )
 
 func main() {
+	mygo.App.SetName("termix")
 	a := &app{}
+	saved := a.readState()
 	mygo.App.WhenReady(func() {
+		width, height := initialWindowSize()
+		a.useWindowStateStore(width, height)
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "termix",
-			Width:     1380,
-			Height:    780,
-			MinWidth:  1000,
-			MinHeight: 620,
+			Width:     width,
+			Height:    height,
+			MinWidth:  min(minWindowWidth, width),
+			MinHeight: min(minWindowHeight, height),
 			// The app draws its own chrome: no native title bar or buttons.
 			TitleBarStyle:     mygo.TitleBarHidden,
 			HideWindowButtons: true,
+			StateKey:          "main",
 			Content:           ui.View(a.view),
 		})
 		a.win.OnClosed(func() {
 			a.stopDirWatch()
+			a.saveState()
 			for _, s := range a.sessions {
 				if s.term != nil {
 					_ = s.term.Close()
@@ -30,7 +36,9 @@ func main() {
 			}
 			cleanupShellShim()
 		})
-		a.newSession()
+		if !saved || !a.restoreSessions() {
+			a.newSession()
+		}
 		a.startDirWatch()
 	})
 	if err := mygo.App.Run(); err != nil {
