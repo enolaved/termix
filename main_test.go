@@ -19,7 +19,7 @@ func TestView(t *testing.T) {
 	tt := ui.NewTester(a.view, 1380, 780)
 	for _, want := range []string{
 		"termix", "新建终端", "还没有打开的会话",
-		"还没有打开的终端", "在空白工作区新建终端", "zsh", "等待终端",
+		"还没有打开的终端", "在空白工作区新建终端", shellName(), "等待终端",
 	} {
 		if !tt.HasText(want) {
 			t.Errorf("missing %q in %q", want, tt.Texts())
