@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/plugins/terminal"
@@ -157,13 +158,93 @@ func TestEmptyWorkspaceShowsTerminalError(t *testing.T) {
 	}
 }
 
-func TestLastTerminalSwapsToEmptyWorkspace(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	term, err := terminal.New(terminal.Options{Conn: server})
-	if err != nil {
-		t.Skipf("terminal is unavailable: %v", err)
+func TestCloseRunningSessionAsksForConfirmation(t *testing.T) {
+	term := testTerminal(t)
+	a := &app{
+		sessions: []*session{{id: 1, name: "终端 1", term: term}},
+		activeID: 1,
 	}
+	tt := ui.NewTester(a.view, 1380, 780)
+
+	if err := tt.Click("关闭 终端 1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"关闭这个终端？", "取消", "关闭终端", "终端 1"} {
+		if !tt.HasText(want) {
+			t.Fatalf("missing %q in confirmation dialog: %q", want, tt.Texts())
+		}
+	}
+	if !a.confirmClose || len(a.sessions) != 1 {
+		t.Fatal("closing a running terminal skipped confirmation")
+	}
+
+	if err := tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	if a.confirmClose || len(a.sessions) != 1 {
+		t.Fatal("cancel closed the terminal")
+	}
+
+	a.requestCloseSession(1)
+	tt.Frame()
+	if err := tt.Click("确认关闭终端"); err != nil {
+		t.Fatal(err)
+	}
+	if a.confirmClose || len(a.sessions) != 0 {
+		t.Fatal("confirming did not close the terminal")
+	}
+}
+
+func TestCloseExitedSessionSkipsConfirmation(t *testing.T) {
+	a := &app{
+		sessions: []*session{{id: 1, name: "终端 1"}},
+		activeID: 1,
+	}
+	a.requestCloseSession(1)
+	if a.confirmClose {
+		t.Fatal("confirmation was shown for a session with no running terminal")
+	}
+	if len(a.sessions) != 0 {
+		t.Fatal("exited session was not closed")
+	}
+}
+
+func TestCloseConfirmationMentionsLikelyService(t *testing.T) {
+	term := testTerminal(t)
+	term.Feed([]byte("  VITE v5.4.0  ready in 280 ms\n  Local: http://localhost:5173/\n"))
+	a := &app{
+		sessions: []*session{{id: 1, name: "终端 1", term: term}},
+		activeID: 1,
+	}
+	a.requestCloseSession(1)
+	tt := ui.NewTester(a.view, 1380, 780)
+	for _, want := range []string{"可能仍有服务运行", "终端输出中出现了服务启动信息"} {
+		if !tt.HasText(want) {
+			t.Fatalf("missing service warning %q in %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestServiceHintFromText(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{"Local: http://localhost:5173/", true},
+		{"Listening on 0.0.0.0:8080", true},
+		{"Server started successfully", true},
+		{"watching for file changes", true},
+		{"$ echo hello\nhello", false},
+		{strings.Repeat("old output\n", 30) + "$ echo done", false},
+	} {
+		if got := serviceHintFromText(tc.text); got != tc.want {
+			t.Errorf("serviceHintFromText(%q) = %v, want %v", tc.text, got, tc.want)
+		}
+	}
+}
+
+func TestLastTerminalSwapsToEmptyWorkspace(t *testing.T) {
+	term := testTerminal(t)
 	a := &app{
 		sessions: []*session{{id: 1, name: "终端 1", term: term}},
 		activeID: 1,
@@ -183,6 +264,21 @@ func TestLastTerminalSwapsToEmptyWorkspace(t *testing.T) {
 	if a.terminalSession() != nil {
 		t.Fatal("closed terminal is still the active content")
 	}
+}
+
+func testTerminal(t *testing.T) *terminal.Terminal {
+	t.Helper()
+	client, server := net.Pipe()
+	term, err := terminal.New(terminal.Options{Conn: server})
+	if err != nil {
+		client.Close()
+		t.Skipf("terminal is unavailable: %v", err)
+	}
+	t.Cleanup(func() {
+		client.Close()
+		term.Close()
+	})
+	return term
 }
 
 func TestDetectLangGo(t *testing.T) {

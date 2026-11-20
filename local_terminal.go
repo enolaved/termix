@@ -199,6 +199,10 @@ func (a *app) closeSession(id int) {
 	if a.renameID == id {
 		a.renaming = false
 	}
+	if a.confirmCloseID == id {
+		a.confirmClose = false
+		a.confirmCloseID = 0
+	}
 	if a.activeID == id {
 		switch {
 		case len(a.sessions) == 0:
@@ -228,7 +232,7 @@ func (a *app) terminalState() (string, ui.Color) {
 }
 
 func (a *app) terminalPane(c *ui.Context, p palette) {
-	if a.renaming && a.activeSession() != nil {
+	if (a.renaming || a.confirmClose) && a.activeSession() != nil {
 		// Keep the shell running while the dialog owns the keyboard.
 		ui.Box(c).Fill().Background(p.terminal)
 		return
@@ -242,6 +246,8 @@ func (a *app) terminalPane(c *ui.Context, p palette) {
 
 // beginRename opens the rename dialog for s, selecting its current name.
 func (a *app) beginRename(c *ui.Context, s *session) {
+	a.confirmClose = false
+	a.confirmCloseID = 0
 	a.renaming = true
 	a.renameID = s.id
 	a.renameText = s.name

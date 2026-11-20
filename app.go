@@ -132,6 +132,9 @@ type app struct {
 	renameText  string
 	renameFocus ui.Handle
 
+	confirmClose   bool
+	confirmCloseID int
+
 	langs        map[string]langInfo
 	toolVersions map[string]string
 	toolPending  map[string]bool
@@ -160,6 +163,7 @@ func (a *app) view(c *ui.Context) {
 		})
 	})
 	a.renameDialog(c, p)
+	a.closeConfirmDialog(c, p)
 }
 
 func (a *app) sidebar(c *ui.Context, p palette) {
@@ -260,7 +264,7 @@ func (a *app) localSession(c *ui.Context, p palette, s *session) {
 		}
 		m.Separator()
 		if m.Item("关闭会话").Chosen() {
-			a.closeSession(s.id)
+			a.requestCloseSession(s.id)
 		}
 	})
 	row.Children(func() {
@@ -426,7 +430,7 @@ func (a *app) tab(c *ui.Context, p palette, s *session) {
 		close.Children(func() {
 			icon(c, svgX, 11, p.ink3)
 		})
-		close.OnClick(func() { a.closeSession(s.id) })
+		close.OnClick(func() { a.requestCloseSession(s.id) })
 	})
 	ui.Box(c).Width(4)
 }
