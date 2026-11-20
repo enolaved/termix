@@ -195,6 +195,52 @@ func TestCloseRunningSessionAsksForConfirmation(t *testing.T) {
 	}
 }
 
+func TestSessionToolbarActionsMenu(t *testing.T) {
+	term := testTerminal(t)
+	a := &app{
+		sessions: []*session{{id: 1, name: "终端 1", term: term}},
+		activeID: 1,
+	}
+	tt := ui.NewTester(a.view, 1380, 780)
+
+	if err := tt.Click("终端操作"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"重命名会话…", "关闭会话"} {
+		if !tt.HasText(want) {
+			t.Fatalf("missing %q in toolbar actions menu: %q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("重命名会话…"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.renaming || a.renameID != 1 {
+		t.Fatal("rename was not opened from the toolbar actions menu")
+	}
+}
+
+func TestSessionToolbarActionsMenuClosesRunningTerminal(t *testing.T) {
+	term := testTerminal(t)
+	a := &app{
+		sessions: []*session{{id: 1, name: "终端 1", term: term}},
+		activeID: 1,
+	}
+	tt := ui.NewTester(a.view, 1380, 780)
+
+	if err := tt.Click("终端操作"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("关闭会话"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.confirmClose || a.confirmCloseID != 1 {
+		t.Fatal("toolbar close action skipped the running-terminal confirmation")
+	}
+	if !tt.HasText("关闭这个终端？") {
+		t.Fatalf("missing close confirmation: %q", tt.Texts())
+	}
+}
+
 func TestCloseExitedSessionSkipsConfirmation(t *testing.T) {
 	a := &app{
 		sessions: []*session{{id: 1, name: "终端 1"}},

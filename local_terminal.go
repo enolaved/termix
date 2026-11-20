@@ -106,11 +106,19 @@ func (a *app) terminalTheme() *terminal.Theme {
 // makes it the active session. The emulator draws it with Ghostty's
 // libghostty-vt and sends it the keyboard.
 func (a *app) newSession() {
+	s := a.addSession()
+	if s == nil {
+		a.invalidate()
+		return
+	}
+	a.showSession(s.id)
+}
+
+func (a *app) addSession() *session {
 	a.nextSession++
 	term, err := a.startTerminal(nil, "")
 	if err != nil {
-		a.invalidate()
-		return
+		return nil
 	}
 	s := &session{
 		id:   a.nextSession,
@@ -118,9 +126,7 @@ func (a *app) newSession() {
 		term: term,
 	}
 	a.sessions = append(a.sessions, s)
-	a.activeID = s.id
-	a.sessionSettings.open = false
-	a.invalidate()
+	return s
 }
 
 func (a *app) startTerminal(pin *sessionToolchain, dir string) (*terminal.Terminal, error) {
@@ -204,15 +210,16 @@ func (a *app) selectSession(id int) {
 	if a.sessionByID(id) == nil {
 		return
 	}
-	a.activeID = id
-	a.sessionSettings.open = false
-	a.invalidate()
+	a.showSession(id)
 }
 
 func (a *app) closeSession(id int) {
 	i := a.sessionIndex(id)
 	if i < 0 {
 		return
+	}
+	if a.inSplit(id) {
+		a.removePaneSession(id)
 	}
 	s := a.sessions[i]
 	a.sessions = append(a.sessions[:i], a.sessions[i+1:]...)
@@ -263,8 +270,12 @@ func (a *app) terminalPane(c *ui.Context, p palette) {
 		ui.Box(c).Fill().Background(p.terminal)
 		return
 	}
+	if a.splitting() {
+		a.splitPanes(c, p)
+		return
+	}
 	if s := a.terminalSession(); s != nil {
-		terminal.View(c, s.term).Fill().AutoFocus()
+		a.singlePane(c, p, s)
 		return
 	}
 	a.emptyWorkspace(c, p)
@@ -276,6 +287,7 @@ func (a *app) beginRename(c *ui.Context, s *session) {
 	a.confirmCloseID = 0
 	a.confirmAction = closeTerminal
 	a.restartPin = nil
+	a.sessionSettings.open = false
 	a.renaming = true
 	a.renameID = s.id
 	a.renameText = s.name

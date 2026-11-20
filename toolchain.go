@@ -247,6 +247,7 @@ func (a *app) restartSession(id int, pin *sessionToolchain) {
 	next := &session{id: old.id, name: old.name, term: term, toolchain: pin}
 	a.sessions[index] = next
 	a.activeID = next.id
+	a.focusPaneID = next.id
 	if old.term != nil {
 		_ = old.term.Close()
 	}

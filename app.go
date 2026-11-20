@@ -127,6 +127,8 @@ type app struct {
 	activeID    int
 	nextSession int
 	termErr     error
+	paneRows    [][]int
+	focusPaneID int
 
 	renaming    bool
 	renameID    int
@@ -160,6 +162,7 @@ func (a *app) palette() palette {
 
 func (a *app) view(c *ui.Context) {
 	c.OnShortcut(ui.Cmd, ui.KeyT, func() { a.newSession() })
+	c.OnShortcut(ui.Cmd, ui.KeyD, func() { a.toggleSplit() })
 	p := a.palette()
 	ui.Row(c).Fill().Background(p.canvas).Children(func() {
 		a.sidebar(c, p)
@@ -259,7 +262,9 @@ func (a *app) localSession(c *ui.Context, p palette, s *session) {
 	active := s.id == a.activeID
 	row := ui.ButtonBase(c.Key("session-"+strconv.Itoa(s.id))).Height(56).
 		Margin(0, 0, 0, 8).Padding(0, 16, 0, 16).Radius(6).
-		Cursor(ui.CursorPointer).Label(s.name)
+		Cursor(ui.CursorPointer).Label("打开会话 " + s.name).
+		Tooltip("点击打开，拖拽到右侧可分屏")
+	row.Drag(sessionDrag{ID: s.id})
 	switch {
 	case active:
 		row.Background(p.selected).Border(1, p.selectedBorder)
@@ -267,13 +272,7 @@ func (a *app) localSession(c *ui.Context, p palette, s *session) {
 		row.Background(p.elevated)
 	}
 	row.ContextMenu(func(m *ui.Menu) {
-		if m.Item("重命名会话…").Chosen() {
-			a.beginRename(c, s)
-		}
-		m.Separator()
-		if m.Item("关闭会话").Chosen() {
-			a.requestCloseSession(s.id)
-		}
+		a.sessionActionsMenu(c, s, m)
 	})
 	row.Children(func() {
 		if active {
@@ -329,7 +328,7 @@ func (a *app) shortcuts(c *ui.Context, p palette) {
 		ui.Text(c, "快捷键").FontSize(10).TextColor(p.ink3)
 		shortcutRow(c, p, "⌘T", "新建终端")
 		shortcutRow(c, p, "⌘K", "快速切换会话")
-		shortcutRow(c, p, "⌘D", "纵向分屏")
+		shortcutRow(c, p, "⌘D", "左右分屏")
 	})
 }
 
@@ -360,7 +359,7 @@ func (a *app) tabBar(c *ui.Context, p palette) {
 		a.newTabButton(c, p)
 		ui.Spacer(c)
 		ui.Box(c).Width(10)
-		icon(c, svgPanelRight, 17, p.ink2)
+		a.splitToggleButton(c, p)
 		ui.Box(c).Width(18)
 		icon(c, svgSearch, 16, p.ink2)
 		ui.Box(c).Width(18)
@@ -450,6 +449,26 @@ func (a *app) tab(c *ui.Context, p palette, s *session) {
 	ui.Box(c).Width(4)
 }
 
+func (a *app) sessionActionsMenu(c *ui.Context, s *session, m *ui.Menu) {
+	if m.Item("重命名会话…").Chosen() {
+		a.beginRename(c, s)
+	}
+	if s.id != a.activeID && a.activeSession() != nil {
+		if m.Item("与当前终端分屏").Chosen() {
+			a.startSplit(s.id)
+		}
+	}
+	if a.splitting() {
+		if m.Item("退出分屏").Chosen() {
+			a.stopSplit()
+		}
+	}
+	m.Separator()
+	if m.Item("关闭会话").Chosen() {
+		a.requestCloseSession(s.id)
+	}
+}
+
 func (a *app) sessionToolbar(c *ui.Context, p palette) {
 	s := a.terminalSession()
 	if s == nil {
@@ -462,9 +481,24 @@ func (a *app) sessionToolbar(c *ui.Context, p palette) {
 		ui.Box(c).Width(22)
 		pill := a.langPill(c, p, s, a.sessionLang(s))
 		ui.Spacer(c)
+		a.splitButton(c, p, s)
+		ui.Box(c).Width(8)
 		settings := a.sessionSettingsButton(c, p, s)
 		ui.Box(c).Width(14)
-		icon(c, svgMore, 16, p.ink3)
+		more := ui.ButtonBase(c.Key("session-more")).Size(22, 22).Radius(5).
+			Center().Cursor(ui.CursorPointer).Label("终端操作").
+			Tooltip("终端操作")
+		if more.Hovered() {
+			more.Background(p.subtle)
+		}
+		more.Children(func() {
+			icon(c, svgMore, 16, p.ink3)
+		})
+		more.PopoverMenuButton(func(m *ui.Menu) {
+			a.sessionActionsMenu(c, s, m)
+		}, ui.PopoverMenuButtonOptions{
+			At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd,
+		})
 		if a.sessionSettings.open {
 			anchor := settings
 			if a.sessionSettings.anchor == "pill" {
@@ -479,7 +513,9 @@ func (a *app) sessionToolbar(c *ui.Context, p palette) {
 
 func (a *app) panes(c *ui.Context, p palette) {
 	key := "panes-empty"
-	if s := a.terminalSession(); s != nil {
+	if a.splitting() {
+		key = "panes-layout-" + a.paneLayoutKey()
+	} else if s := a.terminalSession(); s != nil {
 		key = "panes-terminal-" + strconv.Itoa(s.id)
 	}
 	ui.Column(c).Key(key).Grow(1).Background(p.terminal).Clip().Children(func() {
