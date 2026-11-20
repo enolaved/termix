@@ -345,7 +345,7 @@ func (a *app) sidebarFooter(c *ui.Context, p palette) {
 		dot(c, 5, p.accent)
 		ui.Text(c, " 本地").FontSize(10).TextColor(p.ink2)
 		ui.Spacer(c)
-		ui.Text(c, "v0.1.0").FontSize(9.5).TextColor(p.ink3)
+		ui.Text(c, "v0.1.1").FontSize(9.5).TextColor(p.ink3)
 	})
 }
 
