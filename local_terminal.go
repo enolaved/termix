@@ -10,6 +10,59 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// zshShim is a temporary ZDOTDIR whose .zshenv restores the user's own zsh
+// configuration and adds a precmd hook that reports the working directory
+// over OSC 7. The terminal turns that report into Terminal.Dir, which feeds
+// the path and language shown for a session.
+var zshShimDir string
+
+const zshShim = `if (( ${+TERMIX_ORIG_ZDOTDIR} )); then
+  export ZDOTDIR=$TERMIX_ORIG_ZDOTDIR
+else
+  unset ZDOTDIR
+fi
+unset TERMIX_ORIG_ZDOTDIR
+[[ ! -r "${ZDOTDIR-$HOME}/.zshenv" ]] || source -- "${ZDOTDIR-$HOME}/.zshenv"
+
+_termix_report_pwd() {
+  emulate -L zsh
+  printf '\e]7;file://%s%s\a' "${HOST:-localhost}" "$PWD"
+}
+typeset -ga precmd_functions
+precmd_functions+=(_termix_report_pwd)
+`
+
+// shellEnv points zsh at a shim ZDOTDIR that reports the working directory,
+// without touching the user's startup files. Other shells keep their env.
+func shellEnv() []string {
+	if filepath.Base(os.Getenv("SHELL")) != "zsh" {
+		return nil
+	}
+	if zshShimDir == "" {
+		dir, err := os.MkdirTemp("", "termix-zsh-")
+		if err != nil {
+			return nil
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".zshenv"), []byte(zshShim), 0o600); err != nil {
+			os.RemoveAll(dir)
+			return nil
+		}
+		zshShimDir = dir
+	}
+	env := []string{"ZDOTDIR=" + zshShimDir}
+	if orig := os.Getenv("ZDOTDIR"); orig != "" {
+		env = append(env, "TERMIX_ORIG_ZDOTDIR="+orig)
+	}
+	return env
+}
+
+func cleanupShellShim() {
+	if zshShimDir != "" {
+		os.RemoveAll(zshShimDir)
+		zshShimDir = ""
+	}
+}
+
 // session is one local shell in its own pseudo-terminal.
 type session struct {
 	id   int
@@ -55,6 +108,7 @@ func (a *app) newSession() {
 	a.nextSession++
 	term, err := terminal.New(terminal.Options{
 		ShellIntegration: true,
+		Env:              shellEnv(),
 		Font:             terminal.Font{Family: "Menlo", Size: 12.5, LineHeight: 1.2},
 		Padding:          terminal.Padding{X: 20, Y: 16},
 		Theme:            a.terminalTheme(),
@@ -94,6 +148,16 @@ func (a *app) syncTerminalTheme() {
 
 func (a *app) activeSession() *session {
 	return a.sessionByID(a.activeID)
+}
+
+// terminalSession is the active session once it has a live emulator. The
+// right-hand content area only shows terminal UI for such a session.
+func (a *app) terminalSession() *session {
+	s := a.activeSession()
+	if s == nil || s.term == nil {
+		return nil
+	}
+	return s
 }
 
 func (a *app) sessionByID(id int) *session {
@@ -164,23 +228,16 @@ func (a *app) terminalState() (string, ui.Color) {
 }
 
 func (a *app) terminalPane(c *ui.Context, p palette) {
-	if a.renaming {
+	if a.renaming && a.activeSession() != nil {
 		// Keep the shell running while the dialog owns the keyboard.
 		ui.Box(c).Fill().Background(p.terminal)
 		return
 	}
-	if s := a.activeSession(); s != nil && s.term != nil {
+	if s := a.terminalSession(); s != nil {
 		terminal.View(c, s.term).Fill().AutoFocus()
 		return
 	}
-	if a.termErr != nil {
-		ui.Column(c).FillHeight().Padding(22, 18, 22, 18).Gap(6).Children(func() {
-			ui.Text(c, "本机终端启动失败").FontSize(12.5).FontWeight(600).TextColor(p.red)
-			ui.Text(c, a.termErr.Error()).Font("Menlo").FontSize(10.5).TextColor(p.ink3)
-		})
-		return
-	}
-	a.terminalPrompt(c, p)
+	a.emptyWorkspace(c, p)
 }
 
 // beginRename opens the rename dialog for s, selecting its current name.

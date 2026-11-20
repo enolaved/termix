@@ -22,13 +22,16 @@ func main() {
 			Content:           ui.View(a.view),
 		})
 		a.win.OnClosed(func() {
+			a.stopDirWatch()
 			for _, s := range a.sessions {
 				if s.term != nil {
 					_ = s.term.Close()
 				}
 			}
+			cleanupShellShim()
 		})
 		a.newSession()
+		a.startDirWatch()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)

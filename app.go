@@ -131,6 +131,13 @@ type app struct {
 	renameID    int
 	renameText  string
 	renameFocus ui.Handle
+
+	langs        map[string]langInfo
+	toolVersions map[string]string
+	toolPending  map[string]bool
+
+	watchStop chan struct{}
+	watchDir  string
 }
 
 func (a *app) palette() palette {
@@ -379,6 +386,7 @@ func (a *app) themeToggle(c *ui.Context, p palette) {
 
 func (a *app) newTabButton(c *ui.Context, p palette) {
 	btn := ui.ButtonBase(c.Key("tab-new")).Size(22, 22).Radius(5).Center().
+		AlignSelf(ui.End).Margin(0, 0, 5, 0).
 		Cursor(ui.CursorPointer).Label("新建终端").Tooltip("新建终端 ⌘T")
 	if btn.Hovered() {
 		btn.Background(p.subtle)
@@ -424,12 +432,16 @@ func (a *app) tab(c *ui.Context, p palette, s *session) {
 }
 
 func (a *app) sessionToolbar(c *ui.Context, p palette) {
+	s := a.terminalSession()
+	if s == nil {
+		return
+	}
 	ui.Row(c).Height(60).Padding(0, 22, 0, 22).BorderWidth(0, 0, 1, 0).
 		BorderColor(p.subtle).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, a.sessionPath(a.activeSession())).Font("Menlo").FontSize(12.5).
+		ui.Text(c, a.sessionPath(s)).Font("Menlo").FontSize(12.5).
 			TextColor(p.ink2).SingleLine()
 		ui.Box(c).Width(22)
-		pill(c, p, nil, shellName())
+		a.langPill(c, p, a.sessionLang(s))
 		ui.Spacer(c)
 		icon(c, svgSettings, 15, p.ink3)
 		ui.Box(c).Width(14)
@@ -437,31 +449,13 @@ func (a *app) sessionToolbar(c *ui.Context, p palette) {
 	})
 }
 
-func pill(c *ui.Context, p palette, ic *ui.SVG, label string) {
-	ui.Row(c).Height(22).Padding(0, 8, 0, 8).Radius(4).Background(p.subtle).
-		Gap(5).AlignItems(ui.Center).Children(func() {
-		if ic != nil {
-			icon(c, ic, 12, p.ink3)
-		}
-		ui.Text(c, label).FontSize(10.5).TextColor(p.ink2).SingleLine()
-	})
-}
-
 func (a *app) panes(c *ui.Context, p palette) {
-	ui.Column(c).Grow(1).Background(p.terminal).Clip().Children(func() {
+	key := "panes-empty"
+	if s := a.terminalSession(); s != nil {
+		key = "panes-terminal-" + strconv.Itoa(s.id)
+	}
+	ui.Column(c).Key(key).Grow(1).Background(p.terminal).Clip().Children(func() {
 		a.terminalPane(c, p)
-	})
-}
-
-func (a *app) terminalPrompt(c *ui.Context, p palette) {
-	ui.Column(c).Grow(1).Padding(18, 22, 0, 22).Children(func() {
-		ui.Row(c).Height(20).AlignItems(ui.Center).Children(func() {
-			mono(ui.RichText(c,
-				ui.Span{Text: "~", Color: p.blue},
-				ui.Span{Text: " ❯ ", Color: p.accent},
-			)).NoWrap()
-			ui.Box(c).Size(7, 14).Background(p.accent).Margin(0, 1)
-		})
 	})
 }
 
@@ -469,6 +463,13 @@ func (a *app) workspaceStatus(c *ui.Context, p palette) {
 	ui.Row(c).Height(30).Background(p.statusBar).Padding(0, 22, 0, 22).
 		BorderWidth(1, 0, 0, 0).BorderColor(p.statusBorder).
 		AlignItems(ui.Center).Children(func() {
+		if a.terminalSession() == nil {
+			ui.Text(c, "本地工作区").FontSize(10).TextColor(p.ink3)
+			ui.Spacer(c)
+			dot(c, 5, p.ink3)
+			ui.Text(c, " 等待终端").FontSize(10).TextColor(p.ink2)
+			return
+		}
 		ui.Text(c, "UTF-8").FontSize(10).TextColor(p.ink3)
 		ui.Box(c).Width(16)
 		ui.Text(c, shellName()).FontSize(10).TextColor(p.ink3)
@@ -477,10 +478,6 @@ func (a *app) workspaceStatus(c *ui.Context, p palette) {
 		dot(c, 5, color)
 		ui.Text(c, " "+state).FontSize(10).TextColor(p.ink2)
 	})
-}
-
-func mono(e ui.Element) ui.Element {
-	return e.Font("Menlo").FontSize(12).FixedLineHeight(20)
 }
 
 func icon(c *ui.Context, s *ui.SVG, size float32, col ui.Color) {
