@@ -36,7 +36,6 @@ type palette struct {
 	selectedBorder ui.Color
 	tabBorder      ui.Color
 	subtle         ui.Color
-	footerBorder   ui.Color
 	tabBar         ui.Color
 	runBG          ui.Color
 	runBorder      ui.Color
@@ -73,7 +72,6 @@ var dark = palette{
 	selectedBorder: ui.Hex("#222A34"),
 	tabBorder:      ui.Hex("#2A323D"),
 	subtle:         ui.Hex("#1A202B"),
-	footerBorder:   ui.Hex("#191D25"),
 	tabBar:         ui.Hex("#0F1218"),
 	runBG:          ui.Hex("#12251D"),
 	runBorder:      ui.Hex("#1E3B2D"),
@@ -110,7 +108,6 @@ var light = palette{
 	selectedBorder: ui.Hex("#D6DEE8"),
 	tabBorder:      ui.Hex("#CCD5E1"),
 	subtle:         ui.Hex("#EDF0F4"),
-	footerBorder:   ui.Hex("#E7EAEF"),
 	tabBar:         ui.Hex("#F2F4F7"),
 	runBG:          ui.Hex("#E2F6ED"),
 	runBorder:      ui.Hex("#BFE9D7"),
@@ -154,6 +151,8 @@ type app struct {
 	statePath      string
 	restored       *persistedState
 	restoringState bool
+
+	search searchState
 }
 
 func (a *app) palette() palette {
@@ -166,6 +165,7 @@ func (a *app) palette() palette {
 func (a *app) view(c *ui.Context) {
 	c.OnShortcut(ui.Cmd, ui.KeyT, func() { a.newSession() })
 	c.OnShortcut(ui.Cmd, ui.KeyD, func() { a.toggleSplit() })
+	c.OnShortcut(ui.Cmd, ui.KeyP, func() { a.openSearch() })
 	p := a.palette()
 	ui.Row(c).Fill().Background(p.canvas).Children(func() {
 		a.sidebar(c, p)
@@ -178,6 +178,7 @@ func (a *app) view(c *ui.Context) {
 	})
 	a.renameDialog(c, p)
 	a.closeConfirmDialog(c, p)
+	a.searchDialog(c, p)
 }
 
 func (a *app) sidebar(c *ui.Context, p palette) {
@@ -196,10 +197,8 @@ func (a *app) sidebar(c *ui.Context, p palette) {
 						a.localSession(c, p, s)
 					}
 				}
-				a.shortcuts(c, p)
 			})
 		})
-		a.sidebarFooter(c, p)
 	})
 }
 
@@ -232,14 +231,21 @@ func (a *app) newTerminalButton(c *ui.Context, p palette) {
 }
 
 func (a *app) searchField(c *ui.Context, p palette) {
-	ui.Row(c).Height(32).Margin(13, 16, 0, 16).Padding(0, 10, 0, 10).
+	btn := ui.ButtonBase(c.Key("search-sessions")).Height(32).Margin(13, 16, 0, 16).
+		Padding(0, 10, 0, 10).
 		Radius(6).Background(p.field).Border(1, p.border).Gap(7).
-		AlignItems(ui.Center).Children(func() {
+		AlignItems(ui.Center).Cursor(ui.CursorPointer).
+		Label("搜索会话或路径").Tooltip("搜索会话或路径 ⌘P")
+	if btn.Hovered() {
+		btn.Background(p.elevated).Border(1, p.border2)
+	}
+	btn.Children(func() {
 		icon(c, svgSearch, 14, p.ink3)
 		ui.Text(c, "搜索会话或路径").FontSize(11.5).TextColor(p.ink3).SingleLine()
 		ui.Spacer(c)
-		keycap(c, p, "⌘K")
+		keycap(c, p, "⌘P")
 	})
+	btn.OnClick(func() { a.openSearch() })
 }
 
 func (a *app) sectionLabel(c *ui.Context, p palette, name, count string, filter bool) {
@@ -325,33 +331,6 @@ func keycap(c *ui.Context, p palette, label string) {
 	})
 }
 
-func (a *app) shortcuts(c *ui.Context, p palette) {
-	ui.Column(c).Margin(38, 16, 0, 16).Padding(12, 12, 12, 12).Radius(8).
-		Background(p.elevated).Border(1, p.border).Gap(4).Children(func() {
-		ui.Text(c, "快捷键").FontSize(10).TextColor(p.ink3)
-		shortcutRow(c, p, "⌘T", "新建终端")
-		shortcutRow(c, p, "⌘K", "快速切换会话")
-		shortcutRow(c, p, "⌘D", "左右分屏")
-	})
-}
-
-func shortcutRow(c *ui.Context, p palette, keys, label string) {
-	ui.Row(c).Height(16).AlignItems(ui.Center).Gap(10).Children(func() {
-		keycap(c, p, keys)
-		ui.Text(c, label).FontSize(10.5).TextColor(p.ink2).SingleLine()
-	})
-}
-
-func (a *app) sidebarFooter(c *ui.Context, p palette) {
-	ui.Row(c).Height(54).Padding(12, 16, 0, 16).AlignItems(ui.Start).
-		BorderWidth(1, 0, 0, 0).BorderColor(p.footerBorder).Children(func() {
-		dot(c, 5, p.accent)
-		ui.Text(c, " 本地").FontSize(10).TextColor(p.ink2)
-		ui.Spacer(c)
-		ui.Text(c, "v0.1.1").FontSize(9.5).TextColor(p.ink3)
-	})
-}
-
 func (a *app) tabBar(c *ui.Context, p palette) {
 	ui.Row(c).Height(44).Padding(0, 16, 0, 16).Background(p.tabBar).
 		BorderWidth(0, 0, 1, 0).BorderColor(p.border).AlignItems(ui.Center).
@@ -363,10 +342,6 @@ func (a *app) tabBar(c *ui.Context, p palette) {
 		ui.Spacer(c)
 		ui.Box(c).Width(10)
 		a.splitToggleButton(c, p)
-		ui.Box(c).Width(18)
-		icon(c, svgSearch, 16, p.ink2)
-		ui.Box(c).Width(18)
-		icon(c, svgMore, 17, p.ink2)
 		ui.Box(c).Width(14)
 		ui.Box(c).Width(1).Height(16).Background(p.border)
 		ui.Box(c).Width(14)
